@@ -1,7 +1,45 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import './App.css'
+import {
+  ResponsiveContainer, ComposedChart, CartesianGrid, XAxis, YAxis,
+  Tooltip, Legend, Line, Area
+} from 'recharts'
 
 const API_BASE = import.meta.env.DEV ? 'http://localhost:8000' : '';
+
+// ── Timestamp formatter ────────────────────────────────────────────────────────
+const formatXAxisTimestamp = (ts) => {
+  if (!ts) return ''
+  const d = new Date(ts)
+  if (isNaN(d.getTime())) return ts
+  const mm  = String(d.getMonth() + 1).padStart(2, '0')
+  const dd  = String(d.getDate()).padStart(2, '0')
+  const hh  = String(d.getHours()).padStart(2, '0')
+  const min = String(d.getMinutes()).padStart(2, '0')
+  return `${mm}-${dd} ${hh}:${min}`
+}
+
+// ── Chart Tooltip ──────────────────────────────────────────────────────────────
+function ChartTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null
+  const temp        = payload.find(p => p.dataKey === 'temperature')?.value
+  const usageScaled = payload.find(p => p.dataKey === 'usageScaled')?.value
+  return (
+    <div className="chart-tooltip">
+      <div className="chart-tooltip-time">{formatXAxisTimestamp(label)}</div>
+      <div className="chart-tooltip-row">
+        <span className="chart-tooltip-dot" style={{ background: '#f85149' }} />
+        <span className="chart-tooltip-label">Temperature</span>
+        <span className="chart-tooltip-val">{temp?.toFixed(2)}°C</span>
+      </div>
+      <div className="chart-tooltip-row">
+        <span className="chart-tooltip-dot" style={{ background: '#58a6ff' }} />
+        <span className="chart-tooltip-label">Usage</span>
+        <span className="chart-tooltip-val">{usageScaled > 0 ? 'In Use' : 'Off'}</span>
+      </div>
+    </div>
+  )
+}
 
 // ── Reusable DropZone ──────────────────────────────────────────────────────────
 function DropZone({ file, onFile, label, tagClass = 'baseline', className = '', single = false }) {
@@ -333,6 +371,146 @@ function ComparisonResults({ results, onReset }) {
   )
 }
 
+// ── Visualization Results ──────────────────────────────────────────────────────
+function VisualizationResults({ results, onReset }) {
+  const { summary, data, filename } = results
+
+  const chartData = useMemo(() =>
+    data.map(d => ({ ...d, usageScaled: d.usage * 10 })),
+    [data]
+  )
+
+  const fmtDate = (iso) => new Date(iso).toLocaleString()
+
+  return (
+    <div className="results-section">
+      <div className="results-header">
+        <div>
+          <div className="results-title">{summary.stove_name} — Sensor Visualization</div>
+          <div className="results-files">
+            <span className="results-file">
+              <span className="results-file-dot baseline" />{filename}
+            </span>
+          </div>
+        </div>
+        <button className="reset-btn" onClick={onReset}>↩ New Analysis</button>
+      </div>
+
+      <div className="stats-grid">
+        <div className="stat-card accent">
+          <span className="stat-card-label">Cooking Events</span>
+          <span className="stat-card-value">{summary.cooking_events}</span>
+          <span className="stat-card-sub">0→1 transitions</span>
+        </div>
+        <div className="stat-card">
+          <span className="stat-card-label">Time In Use</span>
+          <span className="stat-card-value">{summary.usage_percent}%</span>
+          <span className="stat-card-sub">of total session</span>
+        </div>
+        <div className="stat-card amber-accent">
+          <span className="stat-card-label">Peak Temperature</span>
+          <span className="stat-card-value">{summary.max_temperature}°C</span>
+          <span className="stat-card-sub">maximum recorded</span>
+        </div>
+        <div className="stat-card">
+          <span className="stat-card-label">Total Readings</span>
+          <span className="stat-card-value">{summary.total_readings.toLocaleString()}</span>
+          <span className="stat-card-sub">data points</span>
+        </div>
+      </div>
+
+      <div className="chart-section">
+        <div className="chart-header">
+          <span className="chart-title">Temperature &amp; Usage Over Time</span>
+          <div className="chart-legend">
+            <div className="chart-legend-item">
+              <span className="chart-legend-swatch" style={{ background: '#f85149' }} />
+              Temperature (°C)
+            </div>
+            <div className="chart-legend-item">
+              <span className="chart-legend-swatch" style={{ background: '#58a6ff' }} />
+              Stove Usage
+            </div>
+          </div>
+        </div>
+        <ResponsiveContainer width="100%" height={420}>
+          <ComposedChart data={chartData} margin={{ top: 10, right: 16, left: 0, bottom: 10 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
+            <XAxis
+              dataKey="timestamp"
+              tickFormatter={formatXAxisTimestamp}
+              minTickGap={60}
+              tick={{ fontSize: 11, fill: '#6e7681' }}
+              axisLine={{ stroke: '#30363d' }}
+              tickLine={{ stroke: '#30363d' }}
+            />
+            <YAxis
+              label={{ value: 'Value', angle: -90, position: 'insideLeft', offset: 10, style: { fill: '#6e7681', fontSize: 11 } }}
+              tick={{ fontSize: 11, fill: '#6e7681' }}
+              axisLine={{ stroke: '#30363d' }}
+              tickLine={{ stroke: '#30363d' }}
+            />
+            <Tooltip content={ChartTooltip} />
+            <Legend wrapperStyle={{ display: 'none' }} />
+            <Area
+              type="stepAfter"
+              dataKey="usageScaled"
+              stroke="#58a6ff"
+              fill="#58a6ff"
+              fillOpacity={0.55}
+              isAnimationActive={false}
+            />
+            <Line
+              type="monotone"
+              dataKey="temperature"
+              stroke="#f85149"
+              strokeWidth={1.5}
+              dot={false}
+              isAnimationActive={false}
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="two-panel">
+        <div className="panel">
+          <div className="panel-title">Session Summary</div>
+          {[
+            ['Stove Name',     summary.stove_name],
+            ['Sensor Type',    summary.sensor_type],
+            ['Sensor ID',      summary.sensor_id],
+            ['Start',          fmtDate(summary.start_time)],
+            ['End',            fmtDate(summary.end_time)],
+            ['Total Readings', summary.total_readings.toLocaleString()],
+            ['Cooking Events', summary.cooking_events],
+          ].map(([k, v]) => (
+            <div className="kv-row" key={k}>
+              <span className="kv-key">{k}</span>
+              <span className="kv-val">{v}</span>
+            </div>
+          ))}
+        </div>
+        <div className="panel">
+          <div className="panel-title">Temperature Stats</div>
+          {[
+            ['Min Temp',              `${summary.min_temperature}°C`],
+            ['Mean Temp',             `${summary.mean_temperature}°C`],
+            ['Max Temp',              `${summary.max_temperature}°C`],
+            ['Usage %',               `${summary.usage_percent}%`],
+            ['Events / Day',          summary.cooking_events_per_day],
+            ['Cooking Time / Day',    `${summary.cooking_time_per_day} min`],
+          ].map(([k, v]) => (
+            <div className="kv-row" key={k}>
+              <span className="kv-key">{k}</span>
+              <span className="kv-val">{v}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Main App ───────────────────────────────────────────────────────────────────
 export default function App() {
   const [mode, setMode] = useState('single')
@@ -341,8 +519,7 @@ export default function App() {
   const [targetCol,  setTargetCol]  = useState('Dry_Wood_Per_Cap')
   const [confidence, setConfidence] = useState(0.90)
   const [precision,  setPrecision]  = useState(0.10)
-  
-  // NEW: State to store parsed CSV columns
+
   const [availableColumns, setAvailableColumns] = useState([])
 
   // Single
@@ -352,17 +529,22 @@ export default function App() {
   const [baselineFile, setBaselineFile] = useState(null)
   const [newStoveFile, setNewStoveFile] = useState(null)
   const [paired, setPaired] = useState(true)
-  const [alpha,  setAlpha]  = useState(0.05)
+  const alpha = 0.05
+
+  // Visualize
+  const [visualizeFile, setVisualizeFile] = useState(null)
 
   const [status,   setStatus]   = useState('idle')
   const [results,  setResults]  = useState(null)
   const [errorMsg, setErrorMsg] = useState('')
 
-  // NEW: Read the first few bytes of the selected file to extract column headers
   useEffect(() => {
+    if (mode === 'visualize') return  // visualize mode parses headers server-side
+
     const activeFile = mode === 'single' ? singleFile : baselineFile
-    
+
     if (!activeFile) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAvailableColumns([])
       return
     }
@@ -372,17 +554,13 @@ export default function App() {
       const text = e.target.result
       const firstLine = text.split(/\r?\n/)[0]
       if (firstLine) {
-        // Split by comma, trim spaces, and remove any surrounding quotes
         const headers = firstLine.split(',').map(h => h.trim().replace(/^"|"$/g, ''))
         setAvailableColumns(headers)
-        
-        // Auto-select the first available column if the current target isn't found
         if (headers.length > 0 && !headers.includes(targetCol)) {
           setTargetCol(headers[0])
         }
       }
     }
-    // Read only the first 8KB to keep the frontend fast and memory efficient
     reader.readAsText(activeFile.slice(0, 8192))
   }, [singleFile, baselineFile, mode, targetCol])
 
@@ -390,7 +568,9 @@ export default function App() {
 
   const canRun = mode === 'single'
     ? !!singleFile && !!targetCol
-    : !!baselineFile && !!newStoveFile && !!targetCol
+    : mode === 'compare'
+    ? !!baselineFile && !!newStoveFile && !!targetCol
+    : !!visualizeFile
 
   const runAnalysis = async () => {
     setStatus('loading')
@@ -404,7 +584,7 @@ export default function App() {
         form.append('confidence_level', String(confidence))
         form.append('precision', String(precision))
         res = await fetch(`${API_BASE}/api/single-analysis`, { method: 'POST', body: form })
-      } else {
+      } else if (mode === 'compare') {
         const form = new FormData()
         form.append('baseline_file', baselineFile)
         form.append('newstove_file', newStoveFile)
@@ -414,6 +594,10 @@ export default function App() {
         form.append('paired', String(paired))
         form.append('alpha', String(alpha))
         res = await fetch(`${API_BASE}/api/comparison-analysis`, { method: 'POST', body: form })
+      } else {
+        const form = new FormData()
+        form.append('file', visualizeFile)
+        res = await fetch(`${API_BASE}/api/visualize-data`, { method: 'POST', body: form })
       }
       if (!res.ok) {
         const err = await res.json()
@@ -429,7 +613,8 @@ export default function App() {
 
   const reset = () => {
     setStatus('idle'); setResults(null)
-    setSingleFile(null); setBaselineFile(null); setNewStoveFile(null); setErrorMsg('')
+    setSingleFile(null); setBaselineFile(null); setNewStoveFile(null)
+    setVisualizeFile(null); setErrorMsg('')
   }
 
   return (
@@ -444,11 +629,17 @@ export default function App() {
         {status === 'success' ? (
           mode === 'single'
             ? <SingleResults results={results} confidence={confidence} precision={precision} onReset={reset} />
-            : <ComparisonResults results={results} onReset={reset} />
+            : mode === 'compare'
+            ? <ComparisonResults results={results} onReset={reset} />
+            : <VisualizationResults results={results} onReset={reset} />
         ) : status === 'loading' ? (
           <div className="loading-state">
             <div className="spinner" />
-            <span className="loading-text">Processing dataset{mode === 'compare' ? 's' : ''}…</span>
+            <span className="loading-text">
+              {mode === 'visualize'
+                ? 'Parsing sensor data…'
+                : `Processing dataset${mode === 'compare' ? 's' : ''}…`}
+            </span>
           </div>
         ) : (
           <div className="upload-section">
@@ -460,65 +651,78 @@ export default function App() {
               <button className={`mode-btn ${mode === 'compare' ? 'active' : ''}`} onClick={() => switchMode('compare')}>
                 Compare Two Datasets
               </button>
+              <button className={`mode-btn ${mode === 'visualize' ? 'active' : ''}`} onClick={() => switchMode('visualize')}>
+                Visualize Stove Usage
+              </button>
             </div>
 
             <div className="section-label">Data Input</div>
 
             {mode === 'single' ? (
               <DropZone file={singleFile} onFile={setSingleFile} single />
-            ) : (
+            ) : mode === 'compare' ? (
               <div className="drop-zones-row">
                 <DropZone file={baselineFile} onFile={setBaselineFile} label="Baseline Stove" tagClass="baseline" />
                 <DropZone file={newStoveFile} onFile={setNewStoveFile} label="New Stove" tagClass="newstove" className="newstove-zone" />
               </div>
+            ) : (
+              <>
+                <DropZone file={visualizeFile} onFile={setVisualizeFile} label="Sensor CSV" tagClass="baseline" single />
+                <div className="info-box">
+                  <span>ℹ</span>
+                  <div>Expects a sensor CSV with a metadata preamble followed by a <strong>Timestamp</strong>, <strong>Usage</strong>, and <strong>Temperature</strong> data table (EXACT sensor format).</div>
+                </div>
+              </>
             )}
 
-            <div className="section-label">Parameters</div>
-
-            <div className={`params-grid ${mode === 'compare' ? 'cols-4' : ''}`}>
-              <div className="param-card">
-                <label className="param-label">Target Column</label>
-                {/* NEW: Replaced the input with a dropdown select populated by availableColumns */}
-                <select 
-                  className="param-input" 
-                  value={targetCol}
-                  onChange={e => setTargetCol(e.target.value)}
-                  disabled={availableColumns.length === 0}
-                >
-                  {availableColumns.length > 0 ? (
-                    availableColumns.map(col => (
-                      <option key={col} value={col}>{col}</option>
-                    ))
-                  ) : (
-                    <option value={targetCol}>{targetCol}</option>
-                  )}
-                </select>
-                <span className="param-hint">Select column from CSV</span>
-              </div>
-              
-              <div className="param-card">
-                <label className="param-label">Confidence Level</label>
-                <input className="param-input" type="number" step="0.01" min="0.5" max="0.999"
-                  value={confidence} onChange={e => setConfidence(parseFloat(e.target.value))} />
-                <span className="param-hint">0 – 1 (e.g. 0.90)</span>
-              </div>
-              <div className="param-card">
-                <label className="param-label">Precision (ε)</label>
-                <input className="param-input" type="number" step="0.01" min="0.01" max="0.5"
-                  value={precision} onChange={e => setPrecision(parseFloat(e.target.value))} />
-                <span className="param-hint">e.g. 0.10</span>
-              </div>
-              {mode === 'compare' && (
-                <div className="param-card">
-                  <label className="param-label">Test Type</label>
-                  <div className="toggle-row">
-                    <button className={`toggle ${paired ? 'on' : ''}`} onClick={() => setPaired(p => !p)} />
-                    <span className={`toggle-label ${paired ? 'on' : ''}`}>{paired ? 'Paired' : 'Independent'}</span>
+            {mode !== 'visualize' && (
+              <>
+                <div className="section-label">Parameters</div>
+                <div className={`params-grid ${mode === 'compare' ? 'cols-4' : ''}`}>
+                  <div className="param-card">
+                    <label className="param-label">Target Column</label>
+                    <select
+                      className="param-input"
+                      value={targetCol}
+                      onChange={e => setTargetCol(e.target.value)}
+                      disabled={availableColumns.length === 0}
+                    >
+                      {availableColumns.length > 0 ? (
+                        availableColumns.map(col => (
+                          <option key={col} value={col}>{col}</option>
+                        ))
+                      ) : (
+                        <option value={targetCol}>{targetCol}</option>
+                      )}
+                    </select>
+                    <span className="param-hint">Select column from CSV</span>
                   </div>
-                  <span className="param-hint">{paired ? 'Paired t-test' : "Welch's t-test"}</span>
+
+                  <div className="param-card">
+                    <label className="param-label">Confidence Level</label>
+                    <input className="param-input" type="number" step="0.01" min="0.5" max="0.999"
+                      value={confidence} onChange={e => setConfidence(parseFloat(e.target.value))} />
+                    <span className="param-hint">0 – 1 (e.g. 0.90)</span>
+                  </div>
+                  <div className="param-card">
+                    <label className="param-label">Precision (ε)</label>
+                    <input className="param-input" type="number" step="0.01" min="0.01" max="0.5"
+                      value={precision} onChange={e => setPrecision(parseFloat(e.target.value))} />
+                    <span className="param-hint">e.g. 0.10</span>
+                  </div>
+                  {mode === 'compare' && (
+                    <div className="param-card">
+                      <label className="param-label">Test Type</label>
+                      <div className="toggle-row">
+                        <button className={`toggle ${paired ? 'on' : ''}`} onClick={() => setPaired(p => !p)} />
+                        <span className={`toggle-label ${paired ? 'on' : ''}`}>{paired ? 'Paired' : 'Independent'}</span>
+                      </div>
+                      <span className="param-hint">{paired ? 'Paired t-test' : "Welch's t-test"}</span>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              </>
+            )}
 
             {status === 'error' && (
               <div className="error-box">
@@ -528,7 +732,9 @@ export default function App() {
             )}
 
             <button className="run-btn" disabled={!canRun} onClick={runAnalysis}>
-              ▶ Run {mode === 'single' ? 'Single' : 'Comparison'} Analysis
+              {mode === 'visualize'
+                ? '▶ Visualize Data'
+                : `▶ Run ${mode === 'single' ? 'Single' : 'Comparison'} Analysis`}
             </button>
           </div>
         )}

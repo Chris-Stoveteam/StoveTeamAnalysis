@@ -184,3 +184,108 @@ async def run_comparison_analysis(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- SENSOR CSV PARSER ---
+
+def parse_sensor_csv(contents: bytes):
+    text = contents.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+
+    # Locate the header row dynamically — first cell must equal "Timestamp"
+    header_idx = None
+    for i, line in enumerate(lines):
+        first_cell = line.split(",")[0].strip()
+        if first_cell == "Timestamp":
+            header_idx = i
+            break
+
+    if header_idx is None:
+        raise ValueError(
+            "No 'Timestamp' header row found. Ensure this is a valid sensor CSV "
+            "with a preamble followed by a Timestamp column."
+        )
+
+    # Extract key-value metadata from the preamble
+    metadata = {}
+    for line in lines[:header_idx]:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("sep="):
+            continue
+        parts = stripped.split(",", 1)
+        if len(parts) == 2:
+            key = parts[0].strip().rstrip(":")
+            val = parts[1].strip()
+            if key and val:
+                metadata[key] = val
+
+    # Parse the data table starting at the header row
+    data_text = "\n".join(lines[header_idx:])
+    df = pd.read_csv(io.StringIO(data_text))
+
+    # Match columns by keyword, not exact name
+    usage_col = next((c for c in df.columns if "Usage" in c), None)
+    temp_col   = next((c for c in df.columns if "Temperature" in c), None)
+
+    if usage_col is None:
+        raise ValueError("No column containing 'Usage' found in the data table.")
+    if temp_col is None:
+        raise ValueError("No column containing 'Temperature' found in the data table.")
+
+    df["timestamp"]   = pd.to_datetime(df["Timestamp"], errors="coerce")
+    df["usage"]       = pd.to_numeric(df[usage_col], errors="coerce")
+    df["temperature"] = pd.to_numeric(df[temp_col],  errors="coerce")
+
+    df = df.dropna(subset=["timestamp", "usage", "temperature"])
+    df = df.sort_values("timestamp").reset_index(drop=True)
+
+    return metadata, df
+
+
+# --- VISUALIZE ENDPOINT ---
+
+@app.post("/api/visualize-data")
+async def run_visualize_data(file: UploadFile = File(...)):
+    try:
+        contents = await file.read()
+
+        try:
+            metadata, df = parse_sensor_csv(contents)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        # Cooking events = count of 0→1 transitions
+        prev_usage = df["usage"].shift(1, fill_value=0)
+        cooking_events = int(((df["usage"] == 1) & (prev_usage == 0)).sum())
+
+        summary = {
+            "stove_name":             metadata.get("Stove Name", "Unknown"),
+            "sensor_type":            metadata.get("Sensor Type", "Unknown").strip(),
+            "sensor_id":              metadata.get("Sensor ID", "Unknown"),
+            "start_time":             df["timestamp"].iloc[0].isoformat(),
+            "end_time":               df["timestamp"].iloc[-1].isoformat(),
+            "total_readings":         len(df),
+            "max_temperature":        round(float(df["temperature"].max()), 2),
+            "min_temperature":        round(float(df["temperature"].min()), 2),
+            "mean_temperature":       round(float(df["temperature"].mean()), 2),
+            "usage_percent":          round(float(df["usage"].mean() * 100), 1),
+            "cooking_events":         cooking_events,
+            "cooking_events_per_day": metadata.get("Cooking Events per day", "N/A"),
+            "cooking_time_per_day":   metadata.get("Cooking Time (min/day)", "N/A"),
+        }
+
+        # Build data array — .tolist() converts numpy scalars to Python floats
+        timestamps = df["timestamp"].dt.strftime("%Y-%m-%dT%H:%M:%S").tolist()
+        usages     = df["usage"].tolist()
+        temps      = df["temperature"].tolist()
+        data = [
+            {"timestamp": ts, "usage": u, "temperature": t}
+            for ts, u, t in zip(timestamps, usages, temps)
+        ]
+
+        return {"filename": file.filename, "summary": summary, "data": data}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
