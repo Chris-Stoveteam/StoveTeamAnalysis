@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import './App.css'
 
-const API_BASE = 'http://localhost:8000'
+const API_BASE = import.meta.env.DEV ? 'http://localhost:8000' : '';
 
 // ── Reusable DropZone ──────────────────────────────────────────────────────────
 function DropZone({ file, onFile, label, tagClass = 'baseline', className = '', single = false }) {
