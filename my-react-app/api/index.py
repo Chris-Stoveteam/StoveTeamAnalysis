@@ -5,6 +5,10 @@ import numpy as np
 import scipy.stats as stats
 import math
 import io
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("kpt")
 
 app = FastAPI(title="KPT Analysis API")
 
@@ -58,6 +62,89 @@ def calculate_kpt_confidence(data_series, confidence_level, target_margin_percen
         "relative_moe_percent": round(relative_moe * 100, 2),
         "meets_criteria": bool(meets_criteria)
     }
+
+# NEW: 90/10 precision rule with one-sided confidence-interval fallback
+def calculate_precision_adjusted_value(data, role, confidence_level=0.90, precision=0.10):
+    """
+    Apply the KPT 90/10 precision rule to a single dataset and, on failure,
+    fall back to a one-sided confidence bound.
+
+    The 90/10 rule passes when the *two-sided* margin of error at `confidence_level`
+    is within `precision` (10%) of the sample mean. When it passes, the official
+    statistic is simply the mean.
+
+    When it fails, the official statistic becomes a conservative one-sided bound:
+      - role="baseline" -> Lower Bound of the one-sided 90% CI (Pb_LB90)
+      - role="project"  -> Upper Bound of the one-sided 90% CI (Pp_UB90)
+
+    Using the baseline lower bound and the project upper bound makes any claimed
+    reduction in fuel consumption conservative (harder to over-state).
+    """
+    if role not in ("baseline", "project"):
+        raise ValueError("role must be 'baseline' or 'project'.")
+
+    data = pd.Series(data).dropna().to_numpy(dtype=float)
+    n = len(data)
+    if n < 2:
+        raise ValueError("At least 2 observations are required to compute a confidence interval.")
+
+    mean_val = float(np.mean(data))
+    if mean_val == 0:
+        raise ValueError("Mean of the dataset is zero, cannot evaluate relative precision.")
+
+    std_val = float(np.std(data, ddof=1))
+    standard_error = std_val / np.sqrt(n)
+    alpha = 1 - confidence_level  # 0.10 at 90% confidence
+    df = n - 1
+
+    # 90/10 precision check uses the TWO-sided margin of error.
+    t_two_sided = stats.t.ppf(1 - alpha / 2, df=df)
+    margin_of_error = t_two_sided * standard_error
+    relative_moe = margin_of_error / abs(mean_val)
+    meets_precision = relative_moe <= precision
+
+    # Fallback bounds use the ONE-sided critical value (whole alpha in one tail).
+    t_one_sided = stats.t.ppf(1 - alpha, df=df)
+    lower_bound_90 = mean_val - t_one_sided * standard_error
+    upper_bound_90 = mean_val + t_one_sided * standard_error
+
+    if meets_precision:
+        stat_value = mean_val
+        adjustment = "none"
+        bound_used = None
+    elif role == "baseline":
+        stat_value = lower_bound_90
+        adjustment = "one_sided_lower_bound_90"
+        bound_used = "Pb_LB90"
+        logger.warning(
+            "90/10 precision FAILED for baseline (Pb): relative MoE %.2f%% > %.2f%%. "
+            "Replacing original mean Pb_mean=%.4f with one-sided 90%% lower bound Pb_LB90=%.4f.",
+            relative_moe * 100, precision * 100, mean_val, lower_bound_90,
+        )
+    else:  # role == "project"
+        stat_value = upper_bound_90
+        adjustment = "one_sided_upper_bound_90"
+        bound_used = "Pp_UB90"
+        logger.warning(
+            "90/10 precision FAILED for project (Pp): relative MoE %.2f%% > %.2f%%. "
+            "Replacing original mean Pp_mean=%.4f with one-sided 90%% upper bound Pp_UB90=%.4f.",
+            relative_moe * 100, precision * 100, mean_val, upper_bound_90,
+        )
+
+    return {
+        "role": role,
+        "sample_size": n,
+        "mean": round(mean_val, 4),
+        "std_dev": round(std_val, 4),
+        "two_sided_relative_moe_percent": round(relative_moe * 100, 2),
+        "meets_90_10_precision": bool(meets_precision),
+        "one_sided_lower_bound_90": round(lower_bound_90, 4),
+        "one_sided_upper_bound_90": round(upper_bound_90, 4),
+        "adjustment_applied": adjustment,
+        "bound_used": bound_used,
+        "stat_value": round(stat_value, 4),
+    }
+
 
 # NEW: Calculate absolute and percentage change
 def calculate_change(group_a, group_b):
@@ -159,7 +246,25 @@ async def run_comparison_analysis(
         baseline_sample_size_data = calculate_kpt_sample_size(baseline_df, target_column, confidence_level, precision)
         baseline_confidence_data = calculate_kpt_confidence(baseline_df[target_column], confidence_level, precision)
 
-        # 5. Run comparison calculations
+        # 5. Apply the 90/10 precision rule with one-sided fallback (Pb_stat / Pp_stat)
+        baseline_stat = calculate_precision_adjusted_value(
+            baseline_df[target_column], role="baseline",
+            confidence_level=confidence_level, precision=precision
+        )
+        project_stat = calculate_precision_adjusted_value(
+            newstove_df[target_column], role="project",
+            confidence_level=confidence_level, precision=precision
+        )
+
+        # Conservative change derived from the official (possibly adjusted) statistics
+        pb_stat = baseline_stat["stat_value"]
+        pp_stat = project_stat["stat_value"]
+        adjusted_absolute_change = pp_stat - pb_stat
+        adjusted_percentage_change = (
+            round((adjusted_absolute_change / pb_stat) * 100, 2) if pb_stat != 0 else None
+        )
+
+        # 6. Run comparison calculations
         change_data = calculate_change(baseline_df[target_column], newstove_df[target_column])
         significance_data = test_significance(
             baseline_df[target_column], 
@@ -168,13 +273,23 @@ async def run_comparison_analysis(
             alpha=alpha
         )
 
-        # 6. Return the combined JSON payload
+        # 7. Return the combined JSON payload
         return {
             "baseline_filename": baseline_file.filename,
             "newstove_filename": newstove_file.filename,
             "baseline_health": {
                 "sample_size_analysis": baseline_sample_size_data,
                 "confidence_analysis": baseline_confidence_data
+            },
+            "precision_adjustment": {
+                "baseline": baseline_stat,
+                "project": project_stat,
+                "adjusted_change": {
+                    "baseline_stat": pb_stat,
+                    "project_stat": pp_stat,
+                    "absolute_change": round(adjusted_absolute_change, 4),
+                    "percentage_change": adjusted_percentage_change
+                }
             },
             "comparison_results": {
                 "change_analysis": change_data,

@@ -77,6 +77,81 @@ def calculate_kpt_confidence(data_series, confidence_level=0.90, target_margin_p
         print("❌ WARNING: The data DOES NOT meet the 90/10 confidence rule.")
         print("You may need a larger sample size to achieve the required precision.")
 
+def calculate_adjusted_statistic(data_series, role, confidence_level=0.90, target_margin_percent=0.10):
+    """
+    Applies the 90/10 precision rule and, on failure, falls back to a one-sided
+    90% confidence bound.
+
+    The 90/10 rule checks whether the (two-sided) margin of error at the given
+    confidence level is within `target_margin_percent` of the sample mean.
+
+    - If the rule is met, the official statistic is simply the sample mean.
+    - If the rule fails, a conservative one-sided 90% bound is used instead:
+        * role='baseline' -> Lower Bound (Pb_LB90), so improvements are not overstated.
+        * role='project'  -> Upper Bound (Pp_UB90), so improvements are not overstated.
+
+    Returns the adjusted statistic value (mean or the relevant one-sided bound).
+    """
+    role = role.lower()
+    if role not in ('baseline', 'project'):
+        raise ValueError("role must be either 'baseline' or 'project'.")
+
+    # 1. Basic statistics
+    data_series = pd.Series(data_series).dropna()
+    n = len(data_series)
+    if n < 2:
+        raise ValueError("At least two observations are required to compute a confidence bound.")
+
+    mean_val = np.mean(data_series)
+    std_val = np.std(data_series, ddof=1)
+    dof = n - 1
+    standard_error = std_val / np.sqrt(n)
+
+    if mean_val == 0:
+        raise ValueError("Mean of the data is zero, cannot evaluate the 90/10 precision rule.")
+
+    # 2. Two-sided margin of error for the 90/10 precision check
+    alpha = 1 - confidence_level
+    t_crit_two_sided = stats.t.ppf(1 - (alpha / 2), df=dof)
+    margin_of_error = t_crit_two_sided * standard_error
+    relative_moe = margin_of_error / mean_val
+    meets_criteria = relative_moe <= target_margin_percent
+
+    label = "Baseline (Pb)" if role == 'baseline' else "Project (Pp)"
+
+    print(f"--- 90/10 Precision Check: {label} ---")
+    print(f"Sample Size (n): {n} | df: {dof}")
+    print(f"Sample Mean: {round(mean_val, 4)}")
+    print(f"Relative Margin of Error: {round(relative_moe * 100, 2)}% (target ≤ {target_margin_percent * 100:.0f}%)")
+
+    if meets_criteria:
+        print("✅ Precision met. Using the sample mean as the official value.")
+        print(f"{label} statistic = {round(mean_val, 4)}")
+        print("-" * 38)
+        return mean_val
+
+    # 3. Fallback: one-sided 90% confidence bound.
+    # For a one-sided bound the entire alpha is in one tail, so the critical
+    # value is t.ppf(confidence_level, df) rather than t.ppf(1 - alpha/2, df).
+    t_crit_one_sided = stats.t.ppf(confidence_level, df=dof)
+    one_sided_margin = t_crit_one_sided * standard_error
+
+    if role == 'baseline':
+        adjusted_value = mean_val - one_sided_margin  # Pb_LB90
+        bound_name = "Lower Bound (Pb_LB90)"
+    else:
+        adjusted_value = mean_val + one_sided_margin  # Pp_UB90
+        bound_name = "Upper Bound (Pp_UB90)"
+
+    # 4. Clear logging of the failure and the adjustment applied.
+    print("❌ Precision FAILED: the 90/10 rule was not met for this dataset.")
+    print(f"   Original Sample Mean : {round(mean_val, 4)}")
+    print(f"   Adjusted {bound_name}: {round(adjusted_value, 4)}")
+    print(f"   -> Using the one-sided 90% {bound_name} as the official {label} value.")
+    print("-" * 38)
+
+    return adjusted_value
+
 def calculate_change(group_a, group_b):
     """
     Calculates the absolute and percentage change between the means of two groups.

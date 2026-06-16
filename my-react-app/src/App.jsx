@@ -196,6 +196,7 @@ function ComparisonResults({ results, onReset }) {
   const cr  = results.comparison_results
   const ch  = cr.change_analysis
   const sig = cr.significance_analysis
+  const pa  = results.precision_adjustment   // may be undefined on older API responses
 
   const isSig     = sig.is_significant
   const pctChange = ch.percentage_change
@@ -329,6 +330,76 @@ function ComparisonResults({ results, onReset }) {
           ))}
         </div>
       </div>
+
+      {/* Precision-adjusted estimate (90/10 rule with one-sided fallback) */}
+      {pa && (() => {
+        const adj = pa.adjusted_change
+        const anyAdjusted = !pa.baseline.meets_90_10_precision || !pa.project.meets_90_10_precision
+
+        const DatasetPanel = ({ title, d, boundLabel, boundKey }) => {
+          const failed = !d.meets_90_10_precision
+          return (
+            <div className="panel">
+              <div className="panel-title">{title}</div>
+              {[
+                ['Sample Size',     d.sample_size],
+                ['Original Mean',   d.mean?.toFixed(4)],
+                ['Rel. MOE (90%)',  `${d.two_sided_relative_moe_percent?.toFixed(2)}%`],
+                ['Meets 90/10',     failed ? 'No △' : 'Yes ✓'],
+                [boundLabel,        d[boundKey]?.toFixed(4)],
+              ].map(([k, v]) => (
+                <div className="kv-row" key={k}>
+                  <span className="kv-key">{k}</span>
+                  <span className="kv-val"
+                    style={k === 'Meets 90/10' ? { color: failed ? '#e3a008' : '#2ea8aa' } : {}}>
+                    {v}
+                  </span>
+                </div>
+              ))}
+              <div className="kv-row">
+                <span className="kv-key">Official Value</span>
+                <span className="kv-val" style={{ color: failed ? '#e3a008' : '#8b949e', fontWeight: 600 }}>
+                  {d.stat_value?.toFixed(4)}
+                  {failed && <span className="param-hint" style={{ marginLeft: 6 }}>(adjusted)</span>}
+                </span>
+              </div>
+            </div>
+          )
+        }
+
+        return (
+          <>
+            <div className="sub-divider">Precision-Adjusted Estimate · 90/10 Rule</div>
+
+            <div className={`verdict ${anyAdjusted ? 'fail' : 'pass'}`}>
+              <span className="verdict-icon">{anyAdjusted ? '△' : '✓'}</span>
+              <div>
+                <div className="verdict-label">
+                  {anyAdjusted ? 'One-Sided Fallback Applied' : 'Both Datasets Meet 90/10 Precision'}
+                </div>
+                <div className="verdict-msg">
+                  {anyAdjusted
+                    ? 'A dataset failed the 90/10 precision rule. A conservative one-sided 90% bound replaces its mean (baseline → lower bound, project → upper bound).'
+                    : 'Both means are precise enough; no adjustment was needed.'}
+                </div>
+                <div className="verdict-detail">
+                  Conservative change: {adj.absolute_change > 0 ? '+' : ''}{adj.absolute_change?.toFixed(4)}
+                  {adj.percentage_change !== null
+                    ? ` (${adj.percentage_change > 0 ? '+' : ''}${adj.percentage_change?.toFixed(2)}%)`
+                    : ''}
+                </div>
+              </div>
+            </div>
+
+            <div className="two-panel">
+              <DatasetPanel title="Baseline (Pb)" d={pa.baseline}
+                boundLabel="Lower Bound (LB90)" boundKey="one_sided_lower_bound_90" />
+              <DatasetPanel title="Project / New Stove (Pp)" d={pa.project}
+                boundLabel="Upper Bound (UB90)" boundKey="one_sided_upper_bound_90" />
+            </div>
+          </>
+        )
+      })()}
 
       <div className="sub-divider">Baseline Health Check</div>
 
