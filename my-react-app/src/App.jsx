@@ -197,6 +197,7 @@ function ComparisonResults({ results, onReset }) {
   const ch  = cr.change_analysis
   const sig = cr.significance_analysis
   const pa  = results.precision_adjustment   // may be undefined on older API responses
+  const ph  = results.project_health         // may be undefined on older API responses
 
   const isSig     = sig.is_significant
   const pctChange = ch.percentage_change
@@ -438,6 +439,53 @@ function ComparisonResults({ results, onReset }) {
           ))}
         </div>
       </div>
+
+      {/* Project (new stove) health check — mirrors the baseline block above */}
+      {ph && (() => {
+        const psa = ph.sample_size_analysis
+        const pca = ph.confidence_analysis
+        return (
+          <>
+            <div className="sub-divider">Project Health Check</div>
+
+            <div className="two-panel">
+              <div className="panel">
+                <div className="panel-title">Sample Size Analysis</div>
+                {[
+                  ['Mean',       psa.mean?.toFixed(4)],
+                  ['Std Dev',    psa.sd?.toFixed(4)],
+                  ['COV',        psa.cov?.toFixed(4)],
+                  ['Z-Score',    psa.z_score?.toFixed(3)],
+                  ['Required n', psa.required_sample_size],
+                ].map(([k, v]) => (
+                  <div className="kv-row" key={k}>
+                    <span className="kv-key">{k}</span>
+                    <span className="kv-val" style={k === 'Required n' ? { color: '#2ea8aa' } : {}}>{v}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="panel">
+                <div className="panel-title">Project Confidence</div>
+                {[
+                  ['Sample Size',    pca.sample_size],
+                  ['Mean',           pca.mean?.toFixed(4)],
+                  ['Abs. MOE',       pca.absolute_moe?.toFixed(4)],
+                  ['Rel. MOE',       `${pca.relative_moe_percent?.toFixed(2)}%`],
+                  ['Meets Criteria', pca.meets_criteria ? 'Yes ✓' : 'No △'],
+                ].map(([k, v]) => (
+                  <div className="kv-row" key={k}>
+                    <span className="kv-key">{k}</span>
+                    <span className="kv-val"
+                      style={k === 'Meets Criteria' ? { color: pca.meets_criteria ? '#2ea8aa' : '#e3a008' } : {}}>
+                      {v}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )
+      })()}
     </div>
   )
 }

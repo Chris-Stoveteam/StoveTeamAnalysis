@@ -246,6 +246,10 @@ async def run_comparison_analysis(
         baseline_sample_size_data = calculate_kpt_sample_size(baseline_df, target_column, confidence_level, precision)
         baseline_confidence_data = calculate_kpt_confidence(baseline_df[target_column], confidence_level, precision)
 
+        # 4b. Run the same health/confidence checks for the project (new stove) dataset
+        project_sample_size_data = calculate_kpt_sample_size(newstove_df, target_column, confidence_level, precision)
+        project_confidence_data = calculate_kpt_confidence(newstove_df[target_column], confidence_level, precision)
+
         # 5. Apply the 90/10 precision rule with one-sided fallback (Pb_stat / Pp_stat)
         baseline_stat = calculate_precision_adjusted_value(
             baseline_df[target_column], role="baseline",
@@ -280,6 +284,10 @@ async def run_comparison_analysis(
             "baseline_health": {
                 "sample_size_analysis": baseline_sample_size_data,
                 "confidence_analysis": baseline_confidence_data
+            },
+            "project_health": {
+                "sample_size_analysis": project_sample_size_data,
+                "confidence_analysis": project_confidence_data
             },
             "precision_adjustment": {
                 "baseline": baseline_stat,
